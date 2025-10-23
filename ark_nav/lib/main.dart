@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'screens/settings.dart';
 
 void main() {
   runApp(const MyApp());
@@ -31,8 +32,11 @@ class MapWithUI extends StatefulWidget {
 
 class _MapWithUIState extends State<MapWithUI> {
   LatLng? _currentLatLng;
+  LatLng? _pinnedLatLng; // For pinned location
   TextEditingController _locationController = TextEditingController();
+  TextEditingController _pinLocationController = TextEditingController(); // Pin input
   String selectedDuration = 'Now';
+  final MapController _mapController = MapController(); // Map controller
 
   @override
   void initState() {
@@ -120,14 +124,11 @@ class _MapWithUIState extends State<MapWithUI> {
   }
 
   // Show streets in a dialog
-  void _showNearbyStreetsDialog() async {
-    if (_currentLatLng == null) return;
-
+  void _showNearbyStreetsDialog(LatLng position) async {
     showDialog(
       context: context,
       builder: (context) => FutureBuilder<List<String>>(
-        future: _fetchNearbyStreets(
-            _currentLatLng!.latitude, _currentLatLng!.longitude, 300),
+        future: _fetchNearbyStreets(position.latitude, position.longitude, 300),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const AlertDialog(
@@ -148,7 +149,7 @@ class _MapWithUIState extends State<MapWithUI> {
           } else {
             final streets = snapshot.data ?? [];
             return AlertDialog(
-              backgroundColor: const Color(0xFF1D364E), // Set custom background color
+              backgroundColor: const Color(0xFF1D364E),
               title: const Text(
                 "Nearby Streets",
                 style: TextStyle(color: Colors.white),
@@ -164,18 +165,19 @@ class _MapWithUIState extends State<MapWithUI> {
                       )
                     : GridView.builder(
                         shrinkWrap: true,
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3, // 3 columns
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
                           mainAxisSpacing: 8,
                           crossAxisSpacing: 8,
-                          childAspectRatio: 2.5, // Adjust width/height ratio
+                          childAspectRatio: 2.5,
                         ),
                         itemCount: streets.length,
                         itemBuilder: (context, index) {
                           return Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF2A4A6F), // Slightly lighter for tiles
+                              color: const Color(0xFF2A4A6F),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Center(
@@ -199,11 +201,23 @@ class _MapWithUIState extends State<MapWithUI> {
                 ),
               ],
             );
-
           }
         },
       ),
     );
+  }
+
+  // Convert address to LatLng for pin
+  Future<LatLng?> _getLatLngFromAddress(String address) async {
+    try {
+      List<Location> locations = await locationFromAddress(address);
+      if (locations.isNotEmpty) {
+        return LatLng(locations.first.latitude, locations.first.longitude);
+      }
+    } catch (e) {
+      print("Error converting address: $e");
+    }
+    return null;
   }
 
   @override
@@ -213,17 +227,33 @@ class _MapWithUIState extends State<MapWithUI> {
         children: [
           // Map
           FlutterMap(
+            mapController: _mapController,
             options: MapOptions(
               initialCenter: _currentLatLng ?? LatLng(14.5995, 120.9842),
               initialZoom: 15.0,
             ),
             children: [
               TileLayer(
-                urlTemplate: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                urlTemplate:
+                    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
                 subdomains: const ['a', 'b', 'c'],
                 userAgentPackageName: 'com.example.ark_nav',
               ),
-              if (_currentLatLng != null)
+
+              // Current Location Circle + Marker
+              if (_currentLatLng != null) ...[
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: _currentLatLng!,
+                      radius: 300, // meters
+                      useRadiusInMeter: true,
+                      color: Colors.blue.withOpacity(0),
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.blue,
+                    ),
+                  ],
+                ),
                 MarkerLayer(
                   markers: [
                     Marker(
@@ -231,7 +261,7 @@ class _MapWithUIState extends State<MapWithUI> {
                       width: 50,
                       height: 50,
                       child: GestureDetector(
-                        onTap: _showNearbyStreetsDialog,
+                        onTap: () => _showNearbyStreetsDialog(_currentLatLng!),
                         child: const Icon(
                           Icons.my_location,
                           color: Color(0xFF01AFBA),
@@ -241,6 +271,40 @@ class _MapWithUIState extends State<MapWithUI> {
                     ),
                   ],
                 ),
+              ],
+
+              // Pinned Location Circle + Marker
+              if (_pinnedLatLng != null) ...[
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: _pinnedLatLng!,
+                      radius: 300,
+                      useRadiusInMeter: true,
+                      color: Colors.red.withOpacity(0),
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.red,
+                    ),
+                  ],
+                ),
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: _pinnedLatLng!,
+                      width: 50,
+                      height: 50,
+                      child: GestureDetector(
+                        onTap: () => _showNearbyStreetsDialog(_pinnedLatLng!),
+                        child: const Icon(
+                          Icons.location_on,
+                          color: Colors.red,
+                          size: 40,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
 
@@ -277,7 +341,7 @@ class _MapWithUIState extends State<MapWithUI> {
                   height: 50,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Color(0xFF1D364E),
+                    color: const Color(0xFF1D364E),
                     image: const DecorationImage(
                       image: AssetImage('assets/logo.png'),
                       fit: BoxFit.cover,
@@ -295,7 +359,13 @@ class _MapWithUIState extends State<MapWithUI> {
                   children: [
                     _topIconButton(Icons.notifications, () {}),
                     const SizedBox(width: 8),
-                    _topIconButton(Icons.settings, () {}),
+                    _topIconButton(Icons.settings, () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const Settings()),
+                      );
+                    }),
                   ],
                 ),
               ],
@@ -350,6 +420,11 @@ class _MapWithUIState extends State<MapWithUI> {
                   padding: const EdgeInsets.all(16),
                   decoration: const BoxDecoration(
                     color: Color(0xFF1D364E),
+                    image: DecorationImage(
+                      image: AssetImage('assets/wave.png'),
+                      fit: BoxFit.cover,
+                      opacity: 0.5,
+                    ),
                     borderRadius: BorderRadius.only(
                       topLeft: Radius.circular(30),
                       topRight: Radius.circular(30),
@@ -370,7 +445,8 @@ class _MapWithUIState extends State<MapWithUI> {
                       children: [
                         // Duration selector
                         Container(
-                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 8, horizontal: 4),
                           margin: const EdgeInsets.only(bottom: 16),
                           decoration: BoxDecoration(
                             color: Colors.white12,
@@ -378,7 +454,8 @@ class _MapWithUIState extends State<MapWithUI> {
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: ['Now', '3 Days', '7 Days'].map((duration) {
+                            children: ['Now', '3 Days', '7 Days']
+                                .map((duration) {
                               final bool isSelected = selectedDuration == duration;
                               return GestureDetector(
                                 onTap: () {
@@ -387,16 +464,21 @@ class _MapWithUIState extends State<MapWithUI> {
                                   });
                                 },
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 8, horizontal: 16),
                                   decoration: BoxDecoration(
-                                    color: isSelected ? Colors.blueAccent : Colors.transparent,
+                                    color: isSelected
+                                        ? Colors.blueAccent
+                                        : Colors.transparent,
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
                                     duration,
                                     style: TextStyle(
                                       color: Colors.white,
-                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                      fontWeight: isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
                                     ),
                                   ),
                                 ),
@@ -413,7 +495,8 @@ class _MapWithUIState extends State<MapWithUI> {
                             labelStyle: const TextStyle(color: Colors.white),
                             hintText: 'Enter location',
                             hintStyle: const TextStyle(color: Colors.white70),
-                            prefixIcon: const Icon(Icons.my_location, color: Colors.white),
+                            prefixIcon:
+                                const Icon(Icons.my_location, color: Colors.white),
                             filled: true,
                             fillColor: const Color(0xFF1D364E),
                             border: OutlineInputBorder(
@@ -426,20 +509,32 @@ class _MapWithUIState extends State<MapWithUI> {
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(20),
-                              borderSide: const BorderSide(color: Colors.white, width: 2),
+                              borderSide:
+                                  const BorderSide(color: Colors.white, width: 2),
                             ),
                           ),
                         ),
                         const SizedBox(height: 12),
                         // Pin another location input
                         TextField(
+                          controller: _pinLocationController,
                           style: const TextStyle(color: Colors.white),
+                          onSubmitted: (value) async {
+                            LatLng? latLng = await _getLatLngFromAddress(value);
+                            if (latLng != null) {
+                              setState(() {
+                                _pinnedLatLng = latLng;
+                              });
+                              _mapController.move(latLng, 15.0);
+                            }
+                          },
                           decoration: InputDecoration(
                             labelText: 'Pin another location',
                             labelStyle: const TextStyle(color: Colors.white),
                             hintText: 'Enter another location',
                             hintStyle: const TextStyle(color: Colors.white70),
-                            prefixIcon: const Icon(Icons.location_on, color: Colors.white),
+                            prefixIcon:
+                                const Icon(Icons.location_on, color: Colors.white),
                             filled: true,
                             fillColor: const Color(0xFF1D364E),
                             border: OutlineInputBorder(
@@ -452,7 +547,8 @@ class _MapWithUIState extends State<MapWithUI> {
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(20),
-                              borderSide: const BorderSide(color: Colors.white, width: 2),
+                              borderSide:
+                                  const BorderSide(color: Colors.white, width: 2),
                             ),
                           ),
                         ),
